@@ -1,0 +1,2 @@
+pyserial
+-e git+git://github.com/adammck/pygsm.git#egg=adammck-pygsm
