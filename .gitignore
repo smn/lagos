@@ -1,2 +1,4 @@
 ve/*
 distribute-0.6.10.tar.gz
+*.pyc
+dropin.cache
