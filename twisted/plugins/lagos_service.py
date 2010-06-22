@@ -60,7 +60,7 @@ def load_queue_from_disk(filename):
 def save_queue_to_disk(filename, queue):
     """
     Save the queue to disk when shutting down, makes sure we don't
-    loose any messages during shutdown & restart.
+    lose any messages during shutdown & restart.
     """
     log.msg("Saving queue to %s" % filename)
     fp = open(filename, 'w+')
@@ -69,8 +69,12 @@ def save_queue_to_disk(filename, queue):
 
 
 def callback(url, data={}):
+    """
+    Post the given dictionary to the URL.
+    """
     url_info = urlsplit(url)
     
+    # determine what port we're on
     if url_info.scheme == 'https':
         context_factory = ssl.ClientContextFactory()
         port = url_info.port or 443
