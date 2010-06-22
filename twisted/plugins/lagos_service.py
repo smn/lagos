@@ -33,8 +33,8 @@ def load_queue_from_disk(filename):
     Load the old queue from disk when started. Old messages that weren't
     posted yet are read from the queue and processed.
     """
-    log.msg("Loading queue from %s" % filename)
     if os.path.exists(filename):
+        log.msg("Loading queue from %s" % filename)
         try:
             fp = open(filename, 'r')
             data = pickle.load(fp)
@@ -107,7 +107,8 @@ class LagosService(Service):
     
     def connect_modem(self):
         log.msg("Connecting modem")
-        self.modem = pygsm.GsmModem(port=self.port).boot()
+        self.modem = pygsm.GsmModem(port=self.port, mode="text")
+        self.modem.boot()
         self.modem.incoming_queue = load_queue_from_disk(self.queue_file)
         self.wait_for_network()
     
@@ -131,12 +132,11 @@ class LagosService(Service):
             log.msg("Posting %s to %s" % (message, self.uri))
             deferred = callback(self.uri, {
                 'sender': message.sender,
-                # 'recipient': message.recipient,
                 'text': message.text,
                 'sent': message.sent,
                 'received': message.received,
             })
-            deferred.addCallback(lambda *a: self.modem.delete_sms(message))
+            deferred.addCallback(log.msg)
             deferred.addErrback(log.err)
         else:
             log.msg("No messages available, checking again after %s seconds" % self.interval)
