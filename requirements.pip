@@ -1,5 +1,5 @@
 pyserial
--e git+git://github.com/smn/pygsm.git#egg=smn-pygsm
+-e git+git://github.com/adammck/pygsm.git#egg=adammck-pygsm
 twisted==10.0.0
 simplejson
 pyopenssl
