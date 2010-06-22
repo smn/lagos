@@ -14,7 +14,6 @@ import os.path
 from base64 import b64encode
 from urlparse import urlsplit
 from datetime import datetime
-
 try:
     import cPickle as pickle
 except ImportError:
@@ -24,8 +23,12 @@ class Options(usage.Options):
     optParameters = [
         ["port", "p", "/dev/ttyACM0", "The port where the GSM is connected"],
         ["uri", "u", None, "Where to POST the SMS, http://user:pw@host/resource"],
-        ["queue_file", "q", "queue.pickle", "A pickled queue, saves messages between restarts"],
-        ["interval", "i", 2, "Poll for new messages every so many seconds", int]
+        ["queue_file", "q", "queue.pickle", "A file queue, saves messages between restarts"],
+        ["interval", "i", 2, "Poll for new messages every so many seconds", int],
+    ]
+    
+    optFlags = [
+        ["debug", "d", "Turn on debug output"],
     ]
 
 def load_queue_from_disk(filename):
@@ -95,20 +98,25 @@ def callback(url, data={}):
     )
 
 class LagosService(Service):
-    def __init__(self, uri, queue_file, port, interval):
+    def __init__(self, uri, queue_file, port, interval, debug):
         self.uri = uri
         self.queue_file = queue_file
         self.port = port
         self.interval = interval
+        self.debug = debug
 
     def startService(self):
         log.msg("Starting Lagos")
         self.connect_modem()
     
+    def logger(self, modem, msg, _type):
+        if self.debug:
+            log.msg("%8s %s" % (_type, msg))
+    
     def connect_modem(self):
         log.msg("Connecting modem")
         self.modem = pygsm.GsmModem(port=self.port, mode="text", 
-                                        logger=lambda *a: a)
+                                        logger=self.logger)
         self.modem.boot()
         self.modem.incoming_queue = load_queue_from_disk(self.queue_file)
         self.wait_for_network()
@@ -137,11 +145,20 @@ class LagosService(Service):
                 'sent': message.sent,
                 'received': message.received,
             })
-            deferred.addCallback(log.msg)
-            deferred.addErrback(log.err)
+            deferred.addCallback(self.post_message_success)
+            deferred.addErrback(self.post_message_failed, message)
         else:
             log.msg("No messages available, checking again after %s seconds" % self.interval)
         return reactor.callLater(self.interval, self.poll_messages)
+    
+    def post_message_success(self, result):
+        log.msg(result)
+    
+    def post_message_failed(self, result, message):
+        log.err(result)
+        log.msg("Adding %s to the back of the queue " \
+                "because posting failed" % message)
+        self.modem.incoming_queue.append(message)
     
     def disconnect_modem(self):
         log.msg("Disconnecting modem")
