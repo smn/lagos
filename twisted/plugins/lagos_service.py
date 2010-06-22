@@ -1,23 +1,105 @@
+from __future__ import with_statement
 from zope.interface import implements
 from twisted.python import log, usage
 from twisted.application.service import IServiceMaker, Service
 from twisted.plugin import IPlugin
 from twisted.internet.defer import Deferred
-from twisted.internet import reactor
-from twisted.web.client import Agent
+from twisted.internet import reactor, ssl
+from twisted.web import client
+import shutil
 import pygsm
+import sys
+import urllib
+import os.path
+from base64 import b64encode
+from urlparse import urlsplit
+from datetime import datetime
+
+try:
+    import cPickle as pickle
+except ImportError:
+    import pickle
 
 class Options(usage.Options):
     optParameters = [
         ["port", "p", "/dev/ttyACM0", "The port where the GSM is connected"],
         ["uri", "u", None, "Where to POST the SMS, http://user:pw@host/resource"],
+        ["queue_file", "q", "queue.pickle", "A pickled queue, saves messages between restarts"],
+        ["interval", "i", 2, "Poll for new messages every so many seconds", int]
     ]
 
+def load_queue_from_disk(filename):
+    """
+    Load the old queue from disk when started. Old messages that weren't
+    posted yet are read from the queue and processed.
+    """
+    log.msg("Loading queue from %s" % filename)
+    if os.path.exists(filename):
+        try:
+            fp = open(filename, 'r')
+            data = pickle.load(fp)
+            fp.close()
+            return data
+        except IOError, e:
+            log.err()
+            backup_filename = "%s.%s" % (
+                filename, 
+                datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+            )
+            shutil.copyfile(filename, backup_filename)
+            log.err("Couldn't load queue from %s, backed it up to %s" % (
+                filename, backup_filename
+            ))
+    
+    # return an empty queue, start from scratch.
+    return []
+
+def save_queue_to_disk(filename, queue):
+    """
+    Save the queue to disk when shutting down, makes sure we don't
+    loose any messages during shutdown & restart.
+    """
+    log.msg("Saving queue to %s" % filename)
+    fp = open(filename, 'w+')
+    pickle.dump(queue, fp)
+    fp.close()
+
+
+def callback(url, data={}):
+    url_info = urlsplit(url)
+    
+    if url_info.scheme == 'https':
+        context_factory = ssl.ClientContextFactory()
+        port = url_info.port or 443
+    elif url_info.scheme == 'http':
+        context_factory = None
+        port = url_info.port or 80
+    else:
+        raise RuntimeError, 'unsupported callback scheme %s' % url_info.scheme
+    
+    # Twisted doesn't understand it when auth credentials are passed along
+    # in the URI, remove those (ie scheme://user:password@host/path)
+    url_without_auth = "%s://%s:%s%s" % (
+        url_info.scheme, url_info.hostname, port, url_info.path
+    )
+    # Encode the credentials to send them as an HTTP Header
+    b64_credentials = b64encode("%s:%s" % (url_info.username, url_info.password))
+    return client.getPage(url_without_auth, context_factory, 
+        postdata=urllib.urlencode(data),
+        headers={
+            'Content-Type': 'application/x-www-form-urlencoded; charset=utf-8',
+            'Authentication': 'Basic %s' % b64_credentials
+        }, 
+        agent='Lagos SMS - http://github.com/smn/lagos',
+        method='POST',
+    )
+
 class LagosService(Service):
-    def __init__(self, uri, **modem_options):
+    def __init__(self, uri, queue_file, port, interval):
         self.uri = uri
-        self.modem_options = modem_options
-        self.agent = Agent(reactor)
+        self.queue_file = queue_file
+        self.port = port
+        self.interval = interval
 
     def startService(self):
         log.msg("Starting Lagos")
@@ -25,7 +107,8 @@ class LagosService(Service):
     
     def connect_modem(self):
         log.msg("Connecting modem")
-        self.modem = pygsm.GsmModem(**self.modem_options).boot()
+        self.modem = pygsm.GsmModem(port=self.port).boot()
+        self.modem.incoming_queue = load_queue_from_disk(self.queue_file)
         self.wait_for_network()
     
     def wait_for_network(self):
@@ -46,19 +129,28 @@ class LagosService(Service):
     def post_message(self, message):
         if message:
             log.msg("Posting %s to %s" % (message, self.uri))
-            # deferred = self.agent.request('POST', self.uri, headers, body)
+            deferred = callback(self.uri, {
+                'sender': message.sender,
+                # 'recipient': message.recipient,
+                'text': message.text,
+                'sent': message.sent,
+                'received': message.received,
+            })
+            deferred.addCallback(lambda *a: self.modem.delete_sms(message))
+            deferred.addErrback(log.err)
         else:
-            log.msg("No messages available, checking again after 1 second")
-        reactor.callLater(1, self.poll_messages)       
- 
+            log.msg("No messages available, checking again after %s seconds" % self.interval)
+        return reactor.callLater(self.interval, self.poll_messages)
+    
     def disconnect_modem(self):
         log.msg("Disconnecting modem")
+        save_queue_to_disk(self.queue_file, self.modem.incoming_queue)
+        self.modem.disconnect()
 
     def stopService(self):
         log.msg("Stopping Lagos")
         self.disconnect_modem()
 
-   
 
 class LagosServiceMaker(object):
     implements(IServiceMaker, IPlugin)
@@ -67,9 +159,10 @@ class LagosServiceMaker(object):
     options = Options
     
     def makeService(self, options):
-        options.update({
-            "logger": pygsm.GsmModem.debug_logger
-        })
+        if not options['uri']:
+            print "URI is required"
+            print options
+            sys.exit(1)
         return LagosService(**options)
     
 
