@@ -107,7 +107,8 @@ class LagosService(Service):
     
     def connect_modem(self):
         log.msg("Connecting modem")
-        self.modem = pygsm.GsmModem(port=self.port, mode="text")
+        self.modem = pygsm.GsmModem(port=self.port, mode="text", 
+                                        logger=lambda *a: a)
         self.modem.boot()
         self.modem.incoming_queue = load_queue_from_disk(self.queue_file)
         self.wait_for_network()
