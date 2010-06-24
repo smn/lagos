@@ -22,6 +22,7 @@ except ImportError:
 class Options(usage.Options):
     optParameters = [
         ["port", "p", "/dev/ttyACM0", "The port where the GSM is connected"],
+        ["msisdn", "m", "unknown", "The SIM's MSISDN, used as MO"],
         ["uri", "u", None, "Where to POST the SMS, http://user:pw@host/resource"],
         ["queue_file", "q", "queue.pickle", "A file queue, saves messages between restarts"],
         ["interval", "i", 2, "Poll for new messages every so many seconds", int],
@@ -94,20 +95,21 @@ def callback(url, data={}):
     return client.getPage(url_without_auth, context_factory, 
         postdata=urllib.urlencode(data),
         headers={
-            'Content-Type': 'application/x-www-form-urlencoded; charset=utf-8',
-            'Authentication': 'Basic %s' % b64_credentials
+            'Content-Type': 'application/x-www-form-urlencoded',
+            'Authorization': 'Basic %s' % b64_credentials
         }, 
         agent='Lagos SMS - http://github.com/smn/lagos',
         method='POST',
     )
 
 class LagosService(Service):
-    def __init__(self, uri, queue_file, port, interval, debug):
+    def __init__(self, uri, queue_file, port, interval, debug, msisdn):
         self.uri = uri
         self.queue_file = queue_file
         self.port = port
         self.interval = interval
         self.debug = debug
+        self.msisdn = msisdn
 
     def startService(self):
         log.msg("Starting Lagos")
@@ -144,10 +146,10 @@ class LagosService(Service):
         if message:
             log.msg("Posting %s to %s" % (message, self.uri))
             deferred = callback(self.uri, {
-                'sender': message.sender,
-                'text': message.text,
-                'sent': message.sent,
-                'received': message.received,
+                'sender_msisdn': message.sender,
+                'recipient_msisdn': self.msisdn,
+                'sms_id': 'unknown',
+                'message': message.text,
             })
             deferred.addCallback(self.post_message_success)
             deferred.addErrback(self.post_message_failed, message)
