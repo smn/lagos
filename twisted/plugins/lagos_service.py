@@ -8,6 +8,8 @@ from twisted.internet import reactor, ssl
 from twisted.web import client
 import shutil
 import pygsm
+from pygsm.errors import GsmError
+from serial.serialutil import SerialException
 import sys
 import urllib
 import os.path
@@ -22,10 +24,12 @@ except ImportError:
 class Options(usage.Options):
     optParameters = [
         ["port", "p", "/dev/ttyACM0", "The port where the GSM is connected"],
+        ["backup_ports", "bp", "/dev/ttyACM1,/dev/tty.usbmodem1d11", "Other ports to try in case the primary isn't working"],
         ["msisdn", "m", "unknown", "The SIM's MSISDN, used as MO"],
         ["uri", "u", None, "Where to POST the SMS, http://user:pw@host/resource"],
         ["queue_file", "q", "queue.pickle", "A file queue, saves messages between restarts"],
         ["interval", "i", 2, "Poll for new messages every so many seconds", int],
+        ["connect_interval", "ci", 2, "Check the ports for the modem every so many seconds", int],
     ]
     
     optFlags = [
@@ -103,14 +107,22 @@ def callback(url, data={}):
     )
 
 class LagosService(Service):
-    def __init__(self, uri, queue_file, port, interval, debug, msisdn):
+    def __init__(self, uri, queue_file, port, backup_ports, interval, 
+                    connect_interval, debug, msisdn):
         self.uri = uri
         self.queue_file = queue_file
         self.port = port
+        self.backup_ports = [bp.strip() for bp in backup_ports.split(",")]
         self.interval = interval
+        self.connect_interval = connect_interval
         self.debug = debug
         self.msisdn = msisdn
-
+    
+    def reboot(self):
+        log.msg("Rebooting Lagos")
+        self.stopService()
+        self.startService()
+    
     def startService(self):
         log.msg("Starting Lagos")
         self.connect_modem()
@@ -120,8 +132,24 @@ class LagosService(Service):
             log.msg("%8s %s" % (_type, msg))
     
     def connect_modem(self):
+        ports = [self.port]
+        ports.extend(self.backup_ports)
+        for port in ports:
+            try:
+                self.connect_modem_on_port(port)
+                log.msg("Connected to modem on port %s" % port)
+                return
+            except SerialException, e:
+                if self.debug: log.err()
+                log.msg("Port %s doesn't seem to be working, next!" % port)
+        
+        log.msg("None of the ports are responding, trying all " \
+                "again after %s seconds" % self.connect_interval)
+        reactor.callLater(self.connect_interval, self.reboot)
+    
+    def connect_modem_on_port(self, port):
         log.msg("Connecting modem")
-        self.modem = pygsm.GsmModem(port=self.port, mode="text", 
+        self.modem = pygsm.GsmModem(port=port, mode="text", 
                                         logger=self.logger)
         self.modem.boot()
         self.modem.incoming_queue = load_queue_from_disk(self.queue_file)
@@ -132,15 +160,27 @@ class LagosService(Service):
         self.modem.wait_for_network()
         log.msg("Got network connection, signal strength: %s" % \
                     self.modem.signal_strength())
-        self.poll_messages()
+        deferred = self.poll_messages()
 
     def poll_messages(self):
         log.msg("Polling for messages")
-        deferred = Deferred()
-        deferred.addCallback(self.post_message)
-        deferred.addErrback(log.err)
-        deferred.callback(self.modem.next_message())
-        return deferred
+        try:
+            deferred = Deferred()
+            deferred.addCallback(self.post_message)
+            deferred.addErrback(log.err)
+            deferred.callback(self.modem.next_message())
+            return deferred
+        except GsmError, e:
+            log.err()
+            self.reboot()
+        except SerialException, e:
+            log.err()
+            self.reboot()
+        except Exception, e:
+            log.msg("### UNEXPECTED EXCEPTION ####")
+            log.err()
+            log.msg("Unexpected exception, waiting for a minute before trying again.")
+            reactor.callLater(60, self.reboot)
     
     def post_message(self, message):
         if message:
