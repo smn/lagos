@@ -24,7 +24,7 @@ except ImportError:
 class Options(usage.Options):
     optParameters = [
         ["port", "p", "/dev/ttyACM0", "The port where the GSM is connected"],
-        ["backup_ports", "bp", "/dev/ttyACM1,/dev/tty.usbmodem1d11", "Other ports to try in case the primary isn't working"],
+        ["backup_ports", "bp", "/dev/ttyACM1,/dev/ttyACM2,/dev/tty.usbmodem1d11", "Other ports to try in case the primary isn't working"],
         ["msisdn", "m", "unknown", "The SIM's MSISDN, used as MO"],
         ["uri", "u", None, "Where to POST the SMS, http://user:pw@host/resource"],
         ["queue_file", "q", "queue.pickle", "A file queue, saves messages between restarts"],
