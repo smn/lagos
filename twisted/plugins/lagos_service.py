@@ -1,25 +1,18 @@
 from __future__ import with_statement
 from zope.interface import implements
+
 from twisted.python import log, usage
 from twisted.application.service import IServiceMaker, Service
 from twisted.plugin import IPlugin
 from twisted.internet.defer import Deferred
-from twisted.internet import reactor, ssl
-from twisted.web import client
-import shutil
-import pygsm
+from twisted.internet import reactor
+
 from pygsm.errors import GsmError
 from serial.serialutil import SerialException
-import sys
-import urllib
-import os.path
-from base64 import b64encode
-from urlparse import urlsplit
-from datetime import datetime
-try:
-    import cPickle as pickle
-except ImportError:
-    import pickle
+from contextlib import contextmanager
+from lagos.utils import load_queue_from_disk, save_queue_to_disk, request
+
+import uuid, sys, json, pygsm
 
 class Options(usage.Options):
     optParameters = [
@@ -30,85 +23,18 @@ class Options(usage.Options):
         ["queue_file", "q", "queue.pickle", "A file queue, saves messages between restarts"],
         ["interval", "i", 2, "Poll for new messages every so many seconds", int],
         ["connect_interval", "ci", 2, "Check the ports for the modem every so many seconds", int],
+        ["poll_uri", None, None, "Poll the URI for SMS messages to be sent", str],
+        ["poll_interval", None, 2, "Poll interval", int],
     ]
     
     optFlags = [
         ["debug", "d", "Turn on debug output"],
     ]
 
-def load_queue_from_disk(filename):
-    """
-    Load the old queue from disk when started. Old messages that weren't
-    posted yet are read from the queue and processed.
-    """
-    if os.path.exists(filename):
-        log.msg("Loading queue from %s" % filename)
-        try:
-            fp = open(filename, 'r')
-            data = pickle.load(fp)
-            fp.close()
-            return data
-        except IOError, e:
-            log.err()
-            backup_filename = "%s.%s" % (
-                filename, 
-                datetime.utcnow().strftime("%Y%m%d_%H%M%S")
-            )
-            shutil.copyfile(filename, backup_filename)
-            log.err("Couldn't load queue from %s, backed it up to %s" % (
-                filename, backup_filename
-            ))
-    
-    # return an empty queue, start from scratch.
-    return []
-
-def save_queue_to_disk(filename, queue):
-    """
-    Save the queue to disk when shutting down, makes sure we don't
-    lose any messages during shutdown & restart.
-    """
-    log.msg("Saving queue to %s" % filename)
-    fp = open(filename, 'w+')
-    pickle.dump(queue, fp)
-    fp.close()
-
-
-def callback(url, data={}):
-    """
-    Post the given dictionary to the URL.
-    """
-    url_info = urlsplit(url)
-    
-    # determine what port we're on
-    if url_info.scheme == 'https':
-        context_factory = ssl.ClientContextFactory()
-        port = url_info.port or 443
-    elif url_info.scheme == 'http':
-        context_factory = None
-        port = url_info.port or 80
-    else:
-        raise RuntimeError, 'unsupported callback scheme %s' % url_info.scheme
-    
-    # Twisted doesn't understand it when auth credentials are passed along
-    # in the URI, remove those (ie scheme://user:password@host/path)
-    url_without_auth = "%s://%s:%s%s" % (
-        url_info.scheme, url_info.hostname, port, url_info.path
-    )
-    # Encode the credentials to send them as an HTTP Header
-    b64_credentials = b64encode("%s:%s" % (url_info.username, url_info.password))
-    return client.getPage(url_without_auth, context_factory, 
-        postdata=urllib.urlencode(data),
-        headers={
-            'Content-Type': 'application/x-www-form-urlencoded',
-            'Authorization': 'Basic %s' % b64_credentials
-        }, 
-        agent='Lagos SMS - http://github.com/smn/lagos',
-        method='POST',
-    )
 
 class LagosService(Service):
     def __init__(self, uri, queue_file, port, backup_ports, interval, 
-                    connect_interval, debug, msisdn):
+                    connect_interval, debug, msisdn, poll_uri, poll_interval):
         self.uri = uri
         self.queue_file = queue_file
         self.port = port
@@ -117,6 +43,8 @@ class LagosService(Service):
         self.connect_interval = connect_interval
         self.debug = debug
         self.msisdn = msisdn
+        self.poll_uri = poll_uri
+        self.poll_interval = poll_interval
     
     def reboot(self):
         log.msg("Rebooting Lagos")
@@ -125,7 +53,8 @@ class LagosService(Service):
     
     def startService(self):
         log.msg("Starting Lagos")
-        self.connect_modem()
+        reactor.callLater(0, self.connect_modem)
+        reactor.callLater(0, self.poll_uri_for_messages)
     
     def logger(self, modem, msg, _type):
         if self.debug:
@@ -155,21 +84,21 @@ class LagosService(Service):
         self.modem.incoming_queue = load_queue_from_disk(self.queue_file)
         self.wait_for_network()
     
+    def modem_is_ready(self):
+        return hasattr(self, 'modem') and self.modem.ping()
+    
     def wait_for_network(self):
         log.msg("Waiting for network connection")
         self.modem.wait_for_network()
         log.msg("Got network connection, signal strength: %s" % \
                     self.modem.signal_strength())
-        deferred = self.poll_messages()
-
-    def poll_messages(self):
-        log.msg("Polling for messages")
+        self.poll_modem_for_messages()
+        
+    @contextmanager
+    def reboot_on_exception(self):
+        """Anything that fails in this contextmanager causes a reboot"""
         try:
-            deferred = Deferred()
-            deferred.addCallback(self.post_message)
-            deferred.addErrback(log.err)
-            deferred.callback(self.modem.next_message())
-            return deferred
+            yield
         except GsmError, e:
             log.err()
             self.reboot()
@@ -182,20 +111,69 @@ class LagosService(Service):
             log.msg("Unexpected exception, waiting for a minute before trying again.")
             reactor.callLater(60, self.reboot)
     
+    def poll_modem_for_messages(self):
+        log.msg("Polling for messages")
+        with self.reboot_on_exception():
+            deferred = Deferred()
+            deferred.addCallback(self.post_message)
+            deferred.addErrback(log.err)
+            deferred.callback(self.modem.next_message())
+            return deferred
+    
+    def poll_uri_for_messages(self):
+        with self.reboot_on_exception():
+            log.msg("Polling %s for new messages to be sent out." % self.poll_uri)
+            if self.modem_is_ready():
+                deferred = request(self.poll_uri, method='GET')
+                deferred.addCallback(self.poll_uri_for_messages_success)
+                deferred.addErrback(self.poll_uri_for_messages_fail)
+                return deferred
+            else:
+                log.err("Modem is not ready, no use polling.")
+            # reschedule
+            reactor.callLater(self.poll_interval, self.poll_uri_for_messages)
+    
+    def poll_uri_for_messages_fail(self, result):
+        log.err(result)
+        log.msg("Polling for new messages failed!")
+    
+    def poll_uri_for_messages_success(self, result):
+        required_keys = ['recipient', 'text', 'uri']
+        messages = json.loads(result)
+        for message in messages:
+            # check if the JSON makes any sense
+            if all([k in message for k in required_keys]):
+                # try and send the SMS
+                if self.modem.send_sms(recipient=message['recipient'],
+                                       text=message['text']):
+                    # send an HTTP DELETE to the URI specified in the message
+                    log.msg('Message sent, sending DELETE to %(uri)s' % message)
+                    deferred = request(str(message['uri']), method='DELETE')
+                    deferred.addCallback(self.delete_message_success)
+                    deferred.addErrback(log.err)
+                else:
+                    log.err('Unable to send SMS, no clue why.')
+            else:
+                log.err("Invalid JSON message received, missing " \
+                        "entries: %s" % (required_keys - message.keys(),))
+    
+    def delete_message_success(self, result):
+        log.msg("Message deleted successfully: %s" % result)
+    
     def post_message(self, message):
         if message:
             log.msg("Posting %s to %s" % (message, self.uri))
-            deferred = callback(self.uri, {
+            deferred = request(self.uri, data={
                 'sender_msisdn': message.sender,
                 'recipient_msisdn': self.msisdn,
-                'sms_id': 'unknown',
+                'sms_id': uuid.uuid4(),
                 'message': message.text,
-            })
+            }, method='POST')
             deferred.addCallback(self.post_message_success)
             deferred.addErrback(self.post_message_failed, message)
         else:
             log.msg("No messages available, checking again after %s seconds" % self.interval)
-        return reactor.callLater(self.interval, self.poll_messages)
+        return reactor.callLater(self.interval, self.poll_modem_for_messages)
     
     def post_message_success(self, result):
         log.msg(result)
@@ -210,16 +188,20 @@ class LagosService(Service):
         log.msg("Disconnecting modem")
         save_queue_to_disk(self.queue_file, self.modem.incoming_queue)
         self.modem.disconnect()
+        del self.modem # hopefully garbage collect & disconnect all devices
 
     def stopService(self):
         log.msg("Stopping Lagos")
-        self.disconnect_modem()
+        if self.modem_is_ready():
+            self.disconnect_modem()
+        else:
+            log.msg("Modem not connected, no need to disconnect.")
 
 
 class LagosServiceMaker(object):
     implements(IServiceMaker, IPlugin)
     tapname = "lagos"
-    description = "POST incoming SMSs to a URL"
+    description = "POST incoming SMSs to a URL, poll a URL for outgoing SMSs"
     options = Options
     
     def makeService(self, options):

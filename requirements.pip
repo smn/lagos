@@ -3,3 +3,4 @@ pytz
 -e git+git://github.com/smn/pygsm.git#egg=smn-pygsm
 twisted==10.0.0
 pyopenssl
+json
