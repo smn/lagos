@@ -95,7 +95,7 @@ Remove the `-n` to have it run in the background.
 
 * Serializes messages that haven't been posted yet to 'queue.pickle', will be posted when restarted.
 * Allows specifying of multiple comma separated backup ports with `--backup_ports` in case the modem switches ports for some reason.
-* Supports SSL
+* Supports SSL (pyopenssl requires that you have have openssl installed to compile)
 * Supports HTTP Basic Auth
 * POST parameters currently not yet configurable, you'll have to change the code to do so.
 
