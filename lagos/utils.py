@@ -8,6 +8,7 @@ from twisted.internet import reactor, ssl
 from twisted.web import client
 import os.path
 import shutil
+import urllib
 
 try:
     import cPickle as pickle

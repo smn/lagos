@@ -54,7 +54,8 @@ class LagosService(Service):
     def startService(self):
         log.msg("Starting Lagos")
         reactor.callLater(0, self.connect_modem)
-        reactor.callLater(0, self.poll_uri_for_messages)
+        if self.poll_uri:
+            reactor.callLater(0, self.poll_uri_for_messages)
     
     def logger(self, modem, msg, _type):
         if self.debug:
