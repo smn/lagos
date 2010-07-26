@@ -1,0 +1,9 @@
+#!upstart
+author "Simon de Haan"
+description "Lagos is an SMS sending & receiving gateway for unreliable countries"
+
+expect daemon
+respawn
+
+chdir /home/sdehaan/lagos
+exec "source ve/bin/activate && twistd lagos"
