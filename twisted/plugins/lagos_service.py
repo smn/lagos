@@ -47,9 +47,10 @@ class LagosService(Service):
         self.poll_interval = poll_interval
     
     def reboot(self):
-        log.msg("Rebooting Lagos")
-        self.stopService()
-        self.startService()
+        with self.reboot_on_exception():
+            log.msg("Rebooting Lagos")
+            self.stopService()
+            self.startService()
     
     def startService(self):
         log.msg("Starting Lagos")
