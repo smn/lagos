@@ -12,11 +12,12 @@ from serial.serialutil import SerialException
 from contextlib import contextmanager
 from lagos.utils import load_queue_from_disk, save_queue_to_disk, request
 
-import uuid, sys, json, pygsm
+import uuid, sys, json, pygsm, glob
 
 class Options(usage.Options):
     optParameters = [
         ["port", "p", "/dev/ttyACM0", "The port where the GSM is connected"],
+        ["match_port", "mp", None, "Try the ports matching this pattern for glob"],
         ["backup_ports", "bp", "/dev/ttyACM1,/dev/ttyACM2,/dev/tty.usbmodem1d11", "Other ports to try in case the primary isn't working"],
         ["msisdn", "m", "unknown", "The SIM's MSISDN, used as MO"],
         ["uri", "u", None, "Where to POST the SMS, http://user:pw@host/resource"],
@@ -33,12 +34,16 @@ class Options(usage.Options):
 
 
 class LagosService(Service):
-    def __init__(self, uri, queue_file, port, backup_ports, interval, 
+    def __init__(self, uri, queue_file, port, match_port, backup_ports, interval, 
                     connect_interval, debug, msisdn, poll_uri, poll_interval):
         self.uri = uri
         self.queue_file = queue_file
-        self.port = port
-        self.backup_ports = [bp.strip() for bp in backup_ports.split(",")]
+        self.ports = [port]
+        if backup_ports:
+            self.ports += [bp.strip() for bp in backup_ports.split(",")]
+        if match_port:
+            self.ports += glob.glob(match_port)
+        
         self.interval = interval
         self.connect_interval = connect_interval
         self.debug = debug
@@ -63,9 +68,7 @@ class LagosService(Service):
             log.msg("%8s %s" % (_type, msg))
     
     def connect_modem(self):
-        ports = [self.port]
-        ports.extend(self.backup_ports)
-        for port in ports:
+        for port in self.ports:
             try:
                 self.connect_modem_on_port(port)
                 log.msg("Connected to modem on port %s" % port)
@@ -79,7 +82,7 @@ class LagosService(Service):
         reactor.callLater(self.connect_interval, self.reboot)
     
     def connect_modem_on_port(self, port):
-        log.msg("Connecting modem")
+        log.msg("Attempting modem on port %s" % port)
         self.modem = pygsm.GsmModem(port=port, mode="text", 
                                         logger=self.logger)
         self.modem.boot()
@@ -90,10 +93,11 @@ class LagosService(Service):
         return hasattr(self, 'modem') and self.modem.ping()
     
     def wait_for_network(self):
-        log.msg("Waiting for network connection")
-        self.modem.wait_for_network()
+        with self.reboot_on_exception():
+            log.msg("Waiting for network connection")
+            self.modem.wait_for_network()
         log.msg("Got network connection, signal strength: %s" % \
-                    self.modem.signal_strength())
+                self.modem.signal_strength())
         self.poll_modem_for_messages()
         
     @contextmanager
