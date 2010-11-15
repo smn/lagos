@@ -82,12 +82,13 @@ class LagosService(Service):
         reactor.callLater(self.connect_interval, self.reboot)
     
     def connect_modem_on_port(self, port):
-        log.msg("Attempting modem on port %s" % port)
-        self.modem = pygsm.GsmModem(port=port, mode="text", 
-                                        logger=self.logger)
-        self.modem.boot()
-        self.modem.incoming_queue = load_queue_from_disk(self.queue_file)
-        self.wait_for_network()
+        with self.reboot_on_exception():
+            log.msg("Attempting modem on port %s" % port)
+            self.modem = pygsm.GsmModem(port=port, mode="text", 
+                                            logger=self.logger)
+            self.modem.boot()
+            self.modem.incoming_queue = load_queue_from_disk(self.queue_file)
+            self.wait_for_network()
     
     def modem_is_ready(self):
         return hasattr(self, 'modem') and self.modem.ping()
