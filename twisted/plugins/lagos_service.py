@@ -82,16 +82,12 @@ class LagosService(Service):
         reactor.callLater(self.connect_interval, self.reboot)
     
     def connect_modem_on_port(self, port):
-        try:
-            log.msg("Attempting modem on port %s" % port)
-            self.modem = pygsm.GsmModem(port=port, mode="text", 
-                                            logger=self.logger)
-            self.modem.boot()
-            self.modem.incoming_queue = load_queue_from_disk(self.queue_file)
-            self.wait_for_network()
-        except SerialException, e:
-            log.err("Connecting on port %s raised error" % port)
-            log.err()
+        log.msg("Attempting modem on port %s" % port)
+        self.modem = pygsm.GsmModem(port=port, mode="text", 
+                                        logger=self.logger)
+        self.modem.boot()
+        self.modem.incoming_queue = load_queue_from_disk(self.queue_file)
+        self.wait_for_network()
     
     def modem_is_ready(self):
         return hasattr(self, 'modem') and self.modem.ping()
@@ -100,7 +96,7 @@ class LagosService(Service):
         with self.reboot_on_exception():
             log.msg("Waiting for network connection")
             self.modem.wait_for_network()
-        log.msg("Got network connection, signal strength: %s" % \
+            log.msg("Got network connection, signal strength: %s" % \
                 self.modem.signal_strength())
         self.poll_modem_for_messages()
         
