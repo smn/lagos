@@ -16,7 +16,7 @@ import uuid, sys, json, pygsm, glob
 
 class Options(usage.Options):
     optParameters = [
-        ["port", "p", "/dev/ttyACM0", "The port where the GSM is connected"],
+        ["port", "p", None, "The port where the GSM is connected"],
         ["match_port", "mp", None, "Try the ports matching this pattern for glob"],
         ["backup_ports", "bp", "/dev/ttyACM1,/dev/ttyACM2,/dev/tty.usbmodem1d11", "Other ports to try in case the primary isn't working"],
         ["msisdn", "m", "unknown", "The SIM's MSISDN, used as MO"],
@@ -38,7 +38,7 @@ class LagosService(Service):
                     connect_interval, debug, msisdn, poll_uri, poll_interval):
         self.uri = uri
         self.queue_file = queue_file
-        self.ports = [port]
+        self.ports = [port] if port else []
         if backup_ports:
             self.ports += [bp.strip() for bp in backup_ports.split(",")]
         if match_port:
