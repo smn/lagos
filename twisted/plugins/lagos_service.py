@@ -41,8 +41,7 @@ class LagosService(Service):
         self.ports = [port] if port else []
         if backup_ports:
             self.ports += [bp.strip() for bp in backup_ports.split(",")]
-        if match_port:
-            self.ports += glob.glob(match_port)
+        self.match_port = match_port
         
         self.interval = interval
         self.connect_interval = connect_interval
@@ -68,7 +67,12 @@ class LagosService(Service):
             log.msg("%8s %s" % (_type, msg))
     
     def connect_modem(self):
-        for port in self.ports:
+        ports = self.ports
+        # allow for re-globbing while running, might change after booting
+        if self.match_port:
+            ports += glob.glob(self.match_port)
+        
+        for port in ports:
             try:
                 self.connect_modem_on_port(port)
                 log.msg("Connected to modem on port %s" % port)
