@@ -4,7 +4,7 @@ from datetime import datetime
 from urlparse import urlsplit
 from base64 import b64encode
 from twisted.python import log
-from twisted.internet import reactor, ssl
+from twisted.internet import reactor
 from twisted.web import client
 import os.path
 import shutil
@@ -59,6 +59,7 @@ def request(url, data={}, method='POST'):
     
     # determine what port we're on
     if url_info.scheme == 'https':
+        from twisted.internet import ssl
         context_factory = ssl.ClientContextFactory()
         port = url_info.port or 443
     elif url_info.scheme == 'http':
