@@ -94,7 +94,11 @@ class LagosService(Service):
         self.wait_for_network()
     
     def modem_is_ready(self):
-        return hasattr(self, 'modem') and self.modem.ping()
+        try:
+            return hasattr(self, 'modem') and self.modem.ping()
+        except SerialException, e:
+            log.err()
+            return False
     
     def wait_for_network(self):
         with self.reboot_on_exception():
