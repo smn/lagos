@@ -134,7 +134,9 @@ class LagosService(Service):
                 msg_counter += 1
                 # max 25 messages as once
                 if msg_counter > 25:
+                    print 'msg_counter > 25'
                     break
+                print 'msg_counter', msg_counter
                 msg = self.modem.next_message()
                 # if we have a message, send over HTTP
                 if msg:
