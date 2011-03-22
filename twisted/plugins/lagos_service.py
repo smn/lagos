@@ -6,6 +6,7 @@ from twisted.application.service import IServiceMaker, Service
 from twisted.plugin import IPlugin
 from twisted.internet.defer import Deferred
 from twisted.internet import reactor
+from twisted.web import http
 
 from pygsm.errors import GsmError
 from serial.serialutil import SerialException
@@ -196,9 +197,13 @@ class LagosService(Service):
     
     def post_message_failed(self, result, message):
         log.err(result)
-        log.msg("Adding %s to the back of the queue " \
-                "because posting failed" % message)
-        self.modem.incoming_queue.append(message)
+        exception = result.value
+        if int(exception.status) == http.CONFLICT:
+            log.msg("Duplicate submission, skipping.")
+        else:
+            log.msg("Adding %s to the back of the queue " \
+                    "because posting failed" % message)
+            self.modem.incoming_queue.append(message)
     
     def disconnect_modem(self):
         log.msg("Disconnecting modem")
