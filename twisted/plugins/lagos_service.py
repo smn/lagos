@@ -129,23 +129,11 @@ class LagosService(Service):
     def poll_modem_for_messages(self):
         log.msg("Polling for messages")
         with self.reboot_on_exception():
-            msg_counter = 0
-            while True:
-                msg_counter += 1
-                if msg_counter > 5:
-                    print 'msg_counter > 5'
-                    break
-                print 'msg_counter', msg_counter
-                msg = self.modem.next_message()
-                # if we have a message, send over HTTP
-                if msg:
-                    deferred = Deferred()
-                    deferred.addCallback(self.post_message)
-                    deferred.addErrback(log.err)
-                    deferred.callback(msg)
-                # if not, break
-                else:
-                    break
+            deferred = Deferred()
+            deferred.addCallback(self.post_message)
+            deferred.addErrback(log.err)
+            deferred.callback(self.modem.next_message())
+            return deferred
     
     def poll_uri_for_messages(self):
         with self.reboot_on_exception():
