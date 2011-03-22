@@ -128,11 +128,13 @@ class LagosService(Service):
     def poll_modem_for_messages(self):
         log.msg("Polling for messages")
         with self.reboot_on_exception():
-            deferred = Deferred()
-            deferred.addCallback(self.post_message)
-            deferred.addErrback(log.err)
-            deferred.callback(self.modem.next_message())
-            return deferred
+            # deferred = Deferred()
+            # deferred.addCallback(self.post_message)
+            # deferred.addErrback(log.err)
+            # deferred.callback(self.modem.next_message())
+            # return deferred
+            msg = self.modem.next_message()
+            self.post_message(msg)
     
     def poll_uri_for_messages(self):
         with self.reboot_on_exception():
