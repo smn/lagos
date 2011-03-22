@@ -132,9 +132,8 @@ class LagosService(Service):
             msg_counter = 0
             while True:
                 msg_counter += 1
-                # max 25 messages as once
-                if msg_counter > 25:
-                    print 'msg_counter > 25'
+                if msg_counter > 5:
+                    print 'msg_counter > 5'
                     break
                 print 'msg_counter', msg_counter
                 msg = self.modem.next_message()
